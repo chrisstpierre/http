@@ -11,7 +11,7 @@ from . import Config
 
 Resolve = namedtuple('Resolve', ['endpoint', 'paths'])
 
-Route = namedtuple('Route', ['host', 'path', 'endpoint', 'match_regex'])
+Route = namedtuple('Route', ['host', 'path', 'endpoint'])
 
 
 def dict_decode_values(_dict):
@@ -25,7 +25,8 @@ def dict_decode_values(_dict):
 
 
 def build_match_regex(path):
-    """Parses the provided path and returns the regular expression
+    """
+    Parses the provided path and returns the regular expression
     described by the path.
     """
     path_re = re.compile(
@@ -37,8 +38,7 @@ def build_match_regex(path):
     def match_var_re(var_name):
         return r"/(?P<%s>[a-zA-Z0-9_]+)" % var_name
 
-    def match_wild_re():
-        return r"(.+)"
+    match_wild_re = r"(.+)"
 
     pos = 0
     end = len(path)
@@ -60,7 +60,7 @@ def build_match_regex(path):
         if g.get("wild"):
             if match_regex_parts and "/:" in match_regex_parts[-1]:
                 raise ValueError("wildcard * found in segment also containing path param")
-            match_regex_parts.append(match_wild_re())
+            match_regex_parts.append(match_wild_re)
         else:
             var = g["var"]
             if var in used_names:
@@ -135,20 +135,13 @@ class Router(RuleRouter):
             return
 
         self.logger.info(f'Adding route {method} {host} {path} -> {endpoint}')
-        self._cache.setdefault(method, set()) \
-            .add(Route(host, path, endpoint, match_regex))
+        self._cache.setdefault(method, dict()) \
+            .update({Route(host, path, endpoint): match_regex})
         self._rebuild()
 
     def unregister(self, host, method, path, endpoint):
-        try:
-            match_regex = build_match_regex(path)
-        except ValueError:
-            self.logger.exception(f'Cannot unregister {method} {host} -> {endpoint}.'
-                                  f'Malformed path provided {path}')
-            return
-
-        self._cache.get(method, set()) \
-            .remove(Route(host, path, endpoint, match_regex))
+        self._cache.get(method, dict()) \
+            .pop((host, path, endpoint), None)
         self._rebuild()
 
     def _rebuild(self):
@@ -157,9 +150,9 @@ class Router(RuleRouter):
         for method, routes in self._cache.items():
             rules = [
                 Rule(
-                    HostAndPathMatches(route.host, route.match_regex),
+                    HostAndPathMatches(route.host, match_regex),
                     CustomRouter(route.endpoint)
-                ) for route in routes
+                ) for route, match_regex in routes.items()
             ]
             # create a new rule by method mapping to many rule by path
             method_rules.append(Rule(MethodMatches(method), RuleRouter(rules)))
