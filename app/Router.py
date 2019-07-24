@@ -2,6 +2,7 @@
 import logging
 from logging import Logger
 import os
+import re
 import pickle
 from collections import namedtuple
 from tornado.routing import Router, Matcher, RuleRouter, Rule, PathMatches
@@ -10,7 +11,7 @@ from . import Config
 
 Resolve = namedtuple('Resolve', ['endpoint', 'paths'])
 
-Route = namedtuple('Route', ['host', 'path', 'endpoint'])
+Route = namedtuple('Route', ['host', 'path', 'endpoint', 'match_regex'])
 
 
 def dict_decode_values(_dict):
@@ -21,6 +22,55 @@ def dict_decode_values(_dict):
         key: value.decode('utf-8')
         for key, value in _dict.items()
     }
+
+
+def build_match_regex(path):
+    """Parses the provided path and returns the regular expression
+    described by the path.
+    """
+    path_re = re.compile(
+        r"""
+        (?P<wild>\*+)              # wildcard ie: /* or /end* or /start/*/end
+        |/:(?P<var>[a-zA-Z0-9_]+)  # path variable ie: /user/:id
+        """, re.VERBOSE)
+
+    def match_var_re(var_name):
+        return r"/(?P<%s>[a-zA-Z0-9_]+)" % var_name
+
+    def match_wild_re():
+        return r"(.+)"
+
+    pos = 0
+    end = len(path)
+    match_regex_parts = []
+    used_names = set()
+
+    while pos < end:
+        m = path_re.match(path, pos)
+        if m is None:
+            char = path[pos]
+            if char in " :*":
+                raise ValueError("invalid path segment contains unexpected character %s." % char)
+            if not (pos == end - 1 and char in "/"):
+                match_regex_parts.append(char)
+            pos = pos + 1
+            continue
+
+        g = m.groupdict()
+        if g.get("wild"):
+            if match_regex_parts and "/:" in match_regex_parts[-1]:
+                raise ValueError("wildcard * found in segment also containing path param")
+            match_regex_parts.append(match_wild_re())
+        else:
+            var = g["var"]
+            if var in used_names:
+                raise ValueError("path variable %r used more than once." % var)
+            match_regex_parts.append(match_var_re(var))
+            used_names.add(var)
+
+        pos = m.end()
+
+    return re.compile(r"^%s/?$" % r"".join(match_regex_parts))
 
 
 class CustomRouter(Router):
@@ -78,24 +128,36 @@ class Router(RuleRouter):
             self._rebuild()
 
     def register(self, host, method, path, endpoint):
+        try:
+            match_regex = build_match_regex(path)
+        except ValueError:
+            self.logger.exception(f'Cannot add route {method} {host} with malformed path {path}')
+            return
+
         self.logger.info(f'Adding route {method} {host} {path} -> {endpoint}')
-        self._cache.setdefault(method, set())\
-                   .add(Route(host, path, endpoint))
+        self._cache.setdefault(method, set()) \
+            .add(Route(host, path, endpoint, match_regex))
         self._rebuild()
 
     def unregister(self, host, method, path, endpoint):
-        self._cache.get(method, set())\
-                   .remove(Route(host, path, endpoint))
+        try:
+            match_regex = build_match_regex(path)
+        except ValueError:
+            self.logger.exception(f'Cannot unregister {method} {host} -> {endpoint}.'
+                                  f'Malformed path provided {path}')
+            return
+
+        self._cache.get(method, set()) \
+            .remove(Route(host, path, endpoint, match_regex))
         self._rebuild()
 
     def _rebuild(self):
         """Resolves a uri to the Story and line number to execute."""
-
         method_rules = []
         for method, routes in self._cache.items():
             rules = [
                 Rule(
-                    HostAndPathMatches(route.host, route.path),
+                    HostAndPathMatches(route.host, route.match_regex),
                     CustomRouter(route.endpoint)
                 ) for route in routes
             ]

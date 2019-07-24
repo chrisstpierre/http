@@ -56,6 +56,7 @@ class ExecHandler(SentryMixin, RequestHandler):
             'data': {
                 'uri': self.request.uri,
                 'path': self.request.path,
+                'path_params': resolve.paths,
                 'headers': dict(self.request.headers),
             },
         }
