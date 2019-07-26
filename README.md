@@ -8,6 +8,8 @@ http server as server
     log info msg:r.body
     log info msg:r.headers
     log info msg:r.headers["Host"]
+    log info msg:r.uri
+    log info msg:r.path
     log info msg:r.path_params
     log info msg:r.path_params["name"]
     log info msg:r.path_params["wildcard"]
@@ -32,6 +34,15 @@ Hello World
   path:'/*'                       # Matches everything
 ````
 
+Note: The wildcard path param is reserved and contains the matched wildcard segment
+```coffeescript
+http server as server
+    when server listen method:"get" path:"/user*" as r
+        if r.path == "/user/some/info"
+          r.path_params["wildcard"] == "/some/info" # True
+        if r.path == "/user"
+          r.path_params["wildcard"] == null         # True
+```
 ## Development
 
 Setup virtual environment and install dependencies

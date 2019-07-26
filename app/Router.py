@@ -9,15 +9,17 @@ from tornado.routing import Router, Matcher, RuleRouter, Rule, PathMatches
 
 from . import Config
 
-Resolve = namedtuple('Resolve', ['endpoint', 'paths'])
+Resolve = namedtuple("Resolve", ["endpoint", "paths"])
 
-Route = namedtuple('Route', ['host', 'path', 'endpoint'])
+Route = namedtuple("Route", ["host", "path", "endpoint"])
 
 path_re = re.compile(
     r"""
     (?P<wildcard>\*+)              # wildcard ie: /* or /end* or /start/*/end
-    |/:(?P<var>[a-zA-Z0-9_]+)  # path variable ie: /user/:id
-    """, re.VERBOSE)
+    |/:(?P<var>[a-zA-Z0-9_]+)      # path variable ie: /user/:id
+    """,
+    re.VERBOSE,
+)
 
 
 def dict_decode_values(_dict):
@@ -25,7 +27,7 @@ def dict_decode_values(_dict):
     {'foo': b'bar'} => {'foo': 'bar'}
     """
     return {
-        key: value.decode('utf-8') if value is not None else None
+        key: value.decode("utf-8") if value is not None else None
         for key, value in _dict.items()
     }
 
@@ -39,7 +41,6 @@ def build_match_regex(path):
     def match_var_re(var_name):
         return r"/(?P<%s>[A-Za-z0-9-._~()'!*:@,;]+)" % var_name
 
-    # match_wild_re = r"(?:([A-Za-z0-9-._~()'!*:@,;/]+))?"
     match_wild_re = r"(?P<wildcard>[A-Za-z0-9-._~()'!*:@,;/]+)?"
 
     pos = 0
@@ -48,7 +49,7 @@ def build_match_regex(path):
     used_names = set()
     wildcard_used = False
 
-    if not path or path[0] is not "/":
+    if not path or path[0] != "/":
         raise ValueError("path must begin with /")
 
     while pos < end:
@@ -56,16 +57,21 @@ def build_match_regex(path):
         if m is None:
             char = path[pos]
             if char in " :*":
-                raise ValueError("invalid path segment contains unexpected character %s." % char)
+                raise ValueError(
+                    "invalid path segment contains unexpected character %s." % char
+                )
             if not (pos == end - 1 and char in "/"):
                 match_regex_parts.append(char)
             pos = pos + 1
             continue
 
         g = m.groupdict()
-        if g['wildcard']:
+        if g["wildcard"]:
             if match_regex_parts and "?P<" in match_regex_parts[-1]:
-                raise ValueError("path param segment %s cannot contain wildcard *" % match_regex_parts[-1])
+                raise ValueError(
+                    "path param segment %s cannot contain wildcard *"
+                    % match_regex_parts[-1]
+                )
             if wildcard_used:
                 raise ValueError("wildcard * used more than once")
             match_regex_parts.append(match_wild_re)
@@ -91,7 +97,7 @@ class CustomRouter(Router):
     def find_handler(self, request, **kwargs):
         return Resolve(
             endpoint=self.endpoint,
-            paths=dict_decode_values(kwargs.get('path_kwargs', {}))
+            paths=dict_decode_values(kwargs.get("path_kwargs", {})),
         )
 
 
@@ -109,14 +115,13 @@ class MethodMatches(Matcher):
 
 
 class HostAndPathMatches(PathMatches):
-
     def __init__(self, host, path_pattern):
         super().__init__(path_pattern)
         self.host = host
 
     def match(self, request):
         # Truncate the ".storyscriptapp.com" from "foo.asyncyapp.com"
-        if request.host[:-(Config.PRIMARY_DOMAIN_LEN + 1)] == self.host:
+        if request.host[: -(Config.PRIMARY_DOMAIN_LEN + 1)] == self.host:
             return super().match(request)
 
         return None
@@ -124,7 +129,7 @@ class HostAndPathMatches(PathMatches):
 
 class Router(RuleRouter):
 
-    logger = logging.getLogger('router')
+    logger = logging.getLogger("router")
 
     def __init__(self, routes_file):
         super().__init__()
@@ -134,7 +139,7 @@ class Router(RuleRouter):
 
         if os.path.exists(routes_file):
             # Server restarted, load the cache of routes
-            with open(routes_file, 'rb') as file:
+            with open(routes_file, "rb") as file:
                 self._cache = pickle.load(file)
             self._rebuild()
 
@@ -142,17 +147,19 @@ class Router(RuleRouter):
         try:
             match_regex = build_match_regex(path)
         except ValueError:
-            self.logger.exception(f'Cannot add route {method} {host} with malformed path {path}')
+            self.logger.exception(
+                f"Cannot add route {method} {host} with malformed path {path}"
+            )
             return
 
-        self.logger.info(f'Adding route {method} {host} {path} -> {endpoint}')
-        self._cache.setdefault(method, dict()) \
-            .update({Route(host, path, endpoint): match_regex})
+        self.logger.info(f"Adding route {method} {host} {path} -> {endpoint}")
+        self._cache.setdefault(method, dict()).update(
+            {Route(host, path, endpoint): match_regex}
+        )
         self._rebuild()
 
     def unregister(self, host, method, path, endpoint):
-        self._cache.get(method, dict()) \
-            .pop((host, path, endpoint), None)
+        self._cache.get(method, dict()).pop((host, path, endpoint), None)
         self._rebuild()
 
     def _rebuild(self):
@@ -162,8 +169,9 @@ class Router(RuleRouter):
             rules = [
                 Rule(
                     HostAndPathMatches(route.host, match_regex),
-                    CustomRouter(route.endpoint)
-                ) for route, match_regex in routes.items()
+                    CustomRouter(route.endpoint),
+                )
+                for route, match_regex in routes.items()
             ]
             # create a new rule by method mapping to many rule by path
             method_rules.append(Rule(MethodMatches(method), RuleRouter(rules)))
@@ -172,6 +180,6 @@ class Router(RuleRouter):
         self.rules = method_rules
 
         # save route to file
-        with open(self.routes_file, 'wb') as file:
+        with open(self.routes_file, "wb") as file:
             # [TODO] only works for one server
             pickle.dump(self._cache, file)
