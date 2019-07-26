@@ -13,13 +13,19 @@ Resolve = namedtuple('Resolve', ['endpoint', 'paths'])
 
 Route = namedtuple('Route', ['host', 'path', 'endpoint'])
 
+path_re = re.compile(
+    r"""
+    (?P<wildcard>\*+)              # wildcard ie: /* or /end* or /start/*/end
+    |/:(?P<var>[a-zA-Z0-9_]+)  # path variable ie: /user/:id
+    """, re.VERBOSE)
+
 
 def dict_decode_values(_dict):
     """
     {'foo': b'bar'} => {'foo': 'bar'}
     """
     return {
-        key: value.decode('utf-8')
+        key: value.decode('utf-8') if value is not None else None
         for key, value in _dict.items()
     }
 
@@ -29,21 +35,21 @@ def build_match_regex(path):
     Parses the provided path and returns the regular expression
     described by the path.
     """
-    path_re = re.compile(
-        r"""
-        (?P<wild>\*+)              # wildcard ie: /* or /end* or /start/*/end
-        |/:(?P<var>[a-zA-Z0-9_]+)  # path variable ie: /user/:id
-        """, re.VERBOSE)
 
     def match_var_re(var_name):
-        return r"/(?P<%s>[a-zA-Z0-9_]+)" % var_name
+        return r"/(?P<%s>[A-Za-z0-9-._~()'!*:@,;]+)" % var_name
 
-    match_wild_re = r"(.+)"
+    # match_wild_re = r"(?:([A-Za-z0-9-._~()'!*:@,;/]+))?"
+    match_wild_re = r"(?P<wildcard>[A-Za-z0-9-._~()'!*:@,;/]+)?"
 
     pos = 0
     end = len(path)
     match_regex_parts = []
     used_names = set()
+    wildcard_used = False
+
+    if not path or path[0] is not "/":
+        raise ValueError("path must begin with /")
 
     while pos < end:
         m = path_re.match(path, pos)
@@ -57,12 +63,17 @@ def build_match_regex(path):
             continue
 
         g = m.groupdict()
-        if g.get("wild"):
-            if match_regex_parts and "/:" in match_regex_parts[-1]:
-                raise ValueError("wildcard * found in segment also containing path param")
+        if g['wildcard']:
+            if match_regex_parts and "?P<" in match_regex_parts[-1]:
+                raise ValueError("path param segment %s cannot contain wildcard *" % match_regex_parts[-1])
+            if wildcard_used:
+                raise ValueError("wildcard * used more than once")
             match_regex_parts.append(match_wild_re)
+            wildcard_used = True
         else:
             var = g["var"]
+            if var.lower() == "wildcard":
+                raise ValueError("path variable name :wildcard is reserved")
             if var in used_names:
                 raise ValueError("path variable %r used more than once." % var)
             match_regex_parts.append(match_var_re(var))
